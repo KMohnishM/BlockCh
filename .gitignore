@@ -1,0 +1,52 @@
+# Node.js dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+artifacts/
+
+# Logs
+logs/
+*.log
+*.log.*
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Supabase
+supabase/.env
+supabase/.temp
+
+# Build output
+dist/
+build/
+.cache/
+out/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.iml
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+
+# Debugging files
+coverage/
+*.lcov
+
+# Miscellaneous
+*.bak
+*.orig
