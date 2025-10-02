@@ -30,21 +30,21 @@ const Sidebar = () => {
     },
     {
       name: 'Companies',
-      href: '/companies',
+      href: '/dashboard/companies',
       icon: Building2,
-      current: location.pathname === '/companies',
+      current: location.pathname === '/dashboard/companies',
     },
     {
       name: 'Portfolio',
-      href: '/portfolio',
+      href: '/dashboard/portfolio',
       icon: Wallet,
-      current: location.pathname === '/portfolio',
+      current: location.pathname === '/dashboard/portfolio',
     },
     {
       name: 'Investments',
-      href: '/investments',
+      href: '/dashboard/investments',
       icon: TrendingUp,
-      current: location.pathname === '/investments',
+      current: location.pathname === '/dashboard/investments',
     },
   ];
 

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { 
   TrendingUp, 
   TrendingDown, 
@@ -29,6 +30,7 @@ const Overview = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [chartData, setChartData] = useState(null);
+  const navigate = useNavigate();
 
   const { user } = useAuthStore();
 
@@ -348,19 +350,28 @@ const Overview = () => {
           <h3 className="text-lg font-semibold text-gray-900">Quick Actions</h3>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <button className="p-4 border border-gray-300 rounded-lg hover:border-primary-500 hover:bg-primary-50 transition-colors text-left">
+          <button 
+            onClick={() => navigate('/dashboard/companies')} 
+            className="p-4 border border-gray-300 rounded-lg hover:border-primary-500 hover:bg-primary-50 transition-colors text-left cursor-pointer"
+          >
             <Building2 className="w-8 h-8 text-primary-600 mb-2" />
             <h4 className="font-medium text-gray-900">Explore Companies</h4>
             <p className="text-sm text-gray-500">Discover new investment opportunities</p>
           </button>
           
-          <button className="p-4 border border-gray-300 rounded-lg hover:border-primary-500 hover:bg-primary-50 transition-colors text-left">
+          <button 
+            onClick={() => navigate('/dashboard/companies')} 
+            className="p-4 border border-gray-300 rounded-lg hover:border-primary-500 hover:bg-primary-50 transition-colors text-left cursor-pointer"
+          >
             <DollarSign className="w-8 h-8 text-primary-600 mb-2" />
             <h4 className="font-medium text-gray-900">Make Investment</h4>
             <p className="text-sm text-gray-500">Invest in your favorite companies</p>
           </button>
           
-          <button className="p-4 border border-gray-300 rounded-lg hover:border-primary-500 hover:bg-primary-50 transition-colors text-left">
+          <button 
+            onClick={() => navigate('/dashboard/portfolio')} 
+            className="p-4 border border-gray-300 rounded-lg hover:border-primary-500 hover:bg-primary-50 transition-colors text-left cursor-pointer"
+          >
             <PieChart className="w-8 h-8 text-primary-600 mb-2" />
             <h4 className="font-medium text-gray-900">View Portfolio</h4>
             <p className="text-sm text-gray-500">Analyze your investment portfolio</p>
