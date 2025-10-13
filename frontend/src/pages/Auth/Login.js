@@ -61,6 +61,9 @@ const Login = () => {
         throw new Error('Failed to connect wallet');
       }
 
+      // Log wallet address in browser console for debugging
+      console.log('[Wallet] Connected wallet address:', walletData.address);
+
       // Update wallet store
       walletStore.setWallet(walletData);
 
@@ -76,6 +79,9 @@ const Login = () => {
         signature,
         message
       });
+
+      // Log wallet address after successful auth
+      console.log('[Wallet] Authenticated wallet address:', walletData.address);
 
       toast.success('Authentication successful!');
       navigate(from, { replace: true });

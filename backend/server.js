@@ -17,6 +17,7 @@ const portfolioRoutes = require('./routes/portfolio');
 const fundingRoutes = require('./routes/funding');
 const milestoneRoutes = require('./routes/milestones');
 const userRoutes = require('./routes/users');
+const blockchainRoutes = require('./routes/blockchain');
 const debugRoutes = require('./routes/debug');
 
 // Middleware imports
@@ -82,6 +83,7 @@ app.use('/api/portfolio', authMiddleware, portfolioRoutes);
 app.use('/api/funding', fundingRoutes);
 app.use('/api/milestones', milestoneRoutes);
 app.use('/api/users', authMiddleware, userRoutes);
+app.use('/api/blockchain', blockchainRoutes);
 app.use('/api/debug', debugRoutes);
 
 // Serve uploaded files
@@ -102,10 +104,11 @@ app.use(errorHandler);
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
 
-  socket.on('join:room', (data) => {
-    const room = data.userId || 'general';
+  socket.on('join:room', (data = {}) => {
+    // Support both generic room join and legacy userId-based join
+    const room = data.room || (data.userId ? `user:${data.userId}` : 'general');
     socket.join(room);
-    console.log(`User ${socket.id} joined room ${room}`);
+    console.log(`Socket ${socket.id} joined room ${room}`);
   });
 
   socket.on('disconnect', () => {

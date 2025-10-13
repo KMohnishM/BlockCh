@@ -37,29 +37,25 @@ const WalletButton = () => {
       // Update wallet store
       walletStore.setWallet(walletData);
 
-      // If user is not authenticated, try to authenticate with wallet
-      if (!user) {
-        try {
-          // Generate a message to sign
-          const message = `Welcome to Vyaapar.AI!\n\nPlease sign this message to verify your wallet ownership.\n\nWallet: ${walletData.address}\nTimestamp: ${Date.now()}`;
-          
-          // Sign the message
-          const signature = await web3Service.signMessage(message);
-          
-          // Authenticate with backend
-          await walletAuth({
-            walletAddress: walletData.address,
-            signature,
-            message
-          });
+      // Always authenticate (or link) with backend so the wallet is stored on the profile
+      try {
+        // Generate a message to sign
+        const message = `Welcome to Vyaapar.AI!\n\nPlease sign this message to verify your wallet ownership.\n\nWallet: ${walletData.address}\nTimestamp: ${Date.now()}`;
 
-          toast.success('Wallet connected and authenticated!');
-        } catch (authError) {
-          console.error('Wallet auth failed:', authError);
-          toast.error('Wallet connected but authentication failed');
-        }
-      } else {
-        toast.success('Wallet connected successfully!');
+        // Sign the message
+        const signature = await web3Service.signMessage(message);
+
+        // Authenticate with backend; if already logged in, server will link this wallet to your account
+        await walletAuth({
+          walletAddress: walletData.address,
+          signature,
+          message
+        });
+
+        toast.success(user ? 'Wallet linked to your account!' : 'Wallet connected and authenticated!');
+      } catch (authError) {
+        console.error('Wallet auth failed:', authError);
+        toast.error('Wallet connected but authentication failed');
       }
     } catch (error) {
       console.error('Failed to connect wallet:', error);

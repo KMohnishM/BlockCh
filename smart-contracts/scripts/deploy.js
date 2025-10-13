@@ -8,12 +8,21 @@ async function main() {
   
   // Deploy the contract
   const vyaaparAI = await VyaaparAI.deploy();
-
-  await vyaaparAI.deployed();
-
-  console.log("VyaaparAI deployed to:", vyaaparAI.address);
-  console.log("Contract deployed by:", vyaaparAI.deployTransaction.from);
-  console.log("Transaction hash:", vyaaparAI.deployTransaction.hash);
+  
+  // Wait for the contract to be deployed
+  await vyaaparAI.waitForDeployment();
+  
+  // Get the contract address
+  const contractAddress = await vyaaparAI.getAddress();
+  
+  // Get the deployment transaction
+  const deployTx = vyaaparAI.deploymentTransaction();
+  const provider = hre.ethers.provider;
+  const receipt = await provider.getTransactionReceipt(deployTx.hash);
+  
+  console.log("VyaaparAI deployed to:", contractAddress);
+  console.log("Contract deployed by:", receipt.from);
+  console.log("Transaction hash:", deployTx.hash);
 
   // Save the contract address to a file for the frontend
   const fs = require("fs");
@@ -26,10 +35,10 @@ async function main() {
   fs.writeFileSync(
     contractsDir + "/contract-address.json",
     JSON.stringify({
-      VyaaparAI: vyaaparAI.address,
+      VyaaparAI: contractAddress,
       network: hre.network.name,
-      deployer: vyaaparAI.deployTransaction.from,
-      blockNumber: vyaaparAI.deployTransaction.blockNumber,
+      deployer: receipt.from,
+      blockNumber: receipt.blockNumber,
       deployedAt: new Date().toISOString()
     }, undefined, 2)
   );

@@ -130,14 +130,18 @@ const apiMethods = {
   companies: {
     getAll: (params) => api.get('/companies', { params }),
     getById: (id) => api.get(`/companies/${id}`),
-    create: (companyData) => api.post('/companies/register', companyData),
+    register: (companyData) => api.post('/companies/register', companyData),
+    create: (companyData) => api.post('/companies/register', companyData), // Alias for register
     update: (id, updates) => api.put(`/companies/${id}`, updates),
     getUserCompanies: () => api.get('/companies/user/my-companies'),
+    verifyBlockchain: (id) => api.post(`/companies/${id}/verify-blockchain`),
+    getBlockchainStatus: (id) => api.get(`/companies/${id}/blockchain-status`),
   },
 
   // Investment endpoints
   investments: {
     create: (investmentData) => api.post('/investments', investmentData),
+    createBlockchainInvestment: (data) => api.post('/blockchain/invest', data),
     getUserInvestments: () => api.get('/investments/my-investments'),
     getById: (id) => api.get(`/investments/${id}`),
     getCompanyInvestments: (companyId) => api.get(`/investments/company/${companyId}`),
@@ -170,6 +174,13 @@ const apiMethods = {
     getProfile: () => api.get('/users/profile'),
     updateProfile: (updates) => api.put('/users/profile', updates),
     getActivity: () => api.get('/users/activity'),
+  },
+
+  // Blockchain endpoints
+  blockchain: {
+    verifyTransaction: (txHash) => api.post('/blockchain/verify-transaction', { txHash }),
+    investInCompany: (data) => api.post('/blockchain/invest', data),
+    status: () => api.get('/blockchain/status')
   },
 };
 

@@ -1,10 +1,11 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Card from '../../components/UI/Card';
 import LoadingSpinner from '../../components/UI/LoadingSpinner';
 import { apiMethods } from '../../services/api';
 import { useNavigate } from 'react-router-dom';
-import { formatCurrency } from '../../utils/helpers';
+import web3Service from '../../utils/web3';
+import useWalletStore from '../../store/walletStore';
 
 const industryOptions = [
   { value: '', label: 'Select Industry' },
@@ -25,24 +26,45 @@ const RegisterCompany = () => {
     valuation: '',
     fundingGoal: '',
     foundedDate: '',
+    useBlockchain: true
   });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
   const navigate = useNavigate();
+  const { isConnected, address } = useWalletStore();
+
+  // Check wallet connection on component mount
+  useEffect(() => {
+    if (form.useBlockchain && !isConnected) {
+      setError('Wallet not connected. Please connect your wallet to register with blockchain verification or disable blockchain verification.');
+    } else {
+      setError(null);
+    }
+  }, [form.useBlockchain, isConnected]);
 
   const handleChange = (e) => {
-    const { name, value } = e.target;
-    setForm((prev) => ({ ...prev, [name]: value }));
+    const { name, value, type, checked } = e.target;
+    const val = type === 'checkbox' ? checked : value;
+    setForm((prev) => ({ ...prev, [name]: val }));
+    
+    // Clear errors when blockchain option changes
+    if (name === 'useBlockchain') {
+      setError(null);
+    }
   };
 
   const validate = () => {
     if (!form.name.trim()) return 'Company name is required';
-    if (!form.description.trim()) return 'Description is required';
+    if (!form.description.trim() || form.description.length < 10) return 'Description must be at least 10 characters';
     if (!form.industry) return 'Industry is required';
     if (!form.valuation || isNaN(form.valuation) || Number(form.valuation) <= 0) return 'Valid valuation is required';
-    if (!form.fundingGoal || isNaN(form.fundingGoal) || Number(form.fundingGoal) <= 0) return 'Valid funding goal is required';
-    if (!form.foundedDate) return 'Founded date is required';
+    
+    // Check wallet connection if blockchain verification is enabled
+    if (form.useBlockchain && !isConnected) {
+      return 'Please connect your wallet to register with blockchain verification or disable blockchain verification';
+    }
+    
     return null;
   };
 
@@ -50,28 +72,39 @@ const RegisterCompany = () => {
     e.preventDefault();
     setError(null);
     setSuccess(null);
+    
     const validationError = validate();
     if (validationError) {
       setError(validationError);
       return;
     }
+    
     setIsLoading(true);
+    
     try {
       const payload = {
-        ...form,
+        name: form.name,
+        description: form.description,
+        industry: form.industry,
         valuation: Number(form.valuation),
-        fundingGoal: Number(form.fundingGoal),
+        useBlockchain: form.useBlockchain
       };
-      const response = await apiMethods.companies.create(payload);
+      
+      console.log('Registering company with payload:', payload);
+      const response = await apiMethods.companies.register(payload);
+      
       if (response.data.success) {
+        console.log('Company registration successful:', response.data);
         setSuccess('Company registered successfully!');
+        
         setTimeout(() => {
-          navigate(`/companies/${response.data.data.company.id}`);
-        }, 1200);
+          navigate(`/dashboard/companies/${response.data.data.company.id}`);
+        }, 2000);
       } else {
         setError(response.data.message || 'Failed to register company');
       }
     } catch (err) {
+      console.error('Error registering company:', err);
       setError(err.response?.data?.message || 'Failed to register company');
     } finally {
       setIsLoading(false);
@@ -108,10 +141,13 @@ const RegisterCompany = () => {
               value={form.description}
               onChange={handleChange}
               className="input"
-              placeholder="Describe your company"
+              placeholder="Describe your company (min 10 characters)"
               rows={3}
               required
             />
+            <p className="text-xs text-gray-500 mt-1">
+              {form.description.length}/10 characters minimum
+            </p>
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Industry</label>
@@ -135,7 +171,7 @@ const RegisterCompany = () => {
               value={form.location}
               onChange={handleChange}
               className="input"
-              placeholder="e.g. San Francisco, CA"
+              placeholder="e.g. Mumbai, India"
             />
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -162,7 +198,6 @@ const RegisterCompany = () => {
                 className="input"
                 placeholder="e.g. 1000000"
                 min="1"
-                required
               />
             </div>
           </div>
@@ -174,14 +209,44 @@ const RegisterCompany = () => {
               value={form.foundedDate}
               onChange={handleChange}
               className="input"
-              required
             />
           </div>
+          
+          <div className="flex items-center">
+            <input
+              type="checkbox"
+              name="useBlockchain"
+              id="useBlockchain"
+              checked={form.useBlockchain}
+              onChange={handleChange}
+              className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            <label htmlFor="useBlockchain" className="ml-2 block text-sm text-gray-700">
+              Use Blockchain Verification {!isConnected && form.useBlockchain && 
+              <span className="text-red-600 font-semibold">(Connect wallet first)</span>}
+            </label>
+          </div>
+          
+          {form.useBlockchain && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-blue-800 text-sm">
+              <p className="font-medium mb-2">Blockchain Benefits:</p>
+              <ul className="list-disc pl-5 space-y-1">
+                <li>Immutable proof of company registration</li>
+                <li>Transparent investment tracking</li>
+                <li>Verifiable ownership and milestones</li>
+              </ul>
+              <div className="mt-3 flex items-center">
+                <div className={`w-2 h-2 rounded-full mr-2 ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                <span>Wallet status: {isConnected ? `Connected (${address?.slice(0, 6)}...${address?.slice(-4)})` : 'Not connected'}</span>
+              </div>
+            </div>
+          )}
+          
           <div className="pt-4">
             <button
               type="submit"
               className="btn btn-primary w-full flex items-center justify-center"
-              disabled={isLoading}
+              disabled={isLoading || (form.useBlockchain && !isConnected)}
             >
               {isLoading ? <LoadingSpinner size="small" /> : 'Register Company'}
             </button>

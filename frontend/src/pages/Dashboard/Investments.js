@@ -61,7 +61,22 @@ const Investments = () => {
       };
       
       const response = await apiMethods.investments.getUserInvestments(params);
-      setInvestments(response.data?.investments || []);
+      // Backend returns { success, data: { investments, summary } }
+      const serverInvestments = response.data?.data?.investments || [];
+      // Map to UI-friendly shape expected by this page
+      const mapped = serverInvestments.map(inv => ({
+        id: inv.id,
+        amount: inv.amount ?? 0,
+        currentValue: inv.currentValue ?? inv.amount ?? 0,
+        investmentType: inv.investmentType || 'traditional',
+        status: inv.status || (inv.investmentType === 'blockchain' 
+          ? (inv.isBlockchainVerified ? 'completed' : 'pending')
+          : 'active'),
+        companyName: inv.company?.name || 'Unknown',
+        companyIndustry: inv.company?.industry || '—',
+        investmentDate: inv.createdAt || inv.created_at || new Date().toISOString()
+      }));
+      setInvestments(mapped);
     } catch (error) {
       console.error('Failed to fetch investments:', error);
       setError('Failed to load investments. Please try again.');

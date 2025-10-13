@@ -41,6 +41,11 @@ class SocketService {
     });
 
     this.setupEventListeners();
+
+    // Join useful rooms when userId is available
+    if (userId) {
+      this.joinUserRoom(userId);
+    }
   }
 
   // Setup basic event listeners
@@ -48,7 +53,7 @@ class SocketService {
     if (!this.socket) return;
 
     this.socket.on('connect', () => {
-      console.log('Socket connected:', this.socket.id);
+      console.log('Socket connected:', this.socket?.id || '(unknown)');
       this.isConnected = true;
       this.reconnectAttempts = 0;
       toast.success('Connected to real-time updates');

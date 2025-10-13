@@ -1,6 +1,6 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
-const { supabase } = require('../config/supabase');
+const { supabase, supabaseAdmin } = require('../config/supabase');
 const { authMiddleware } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
 const blockchainService = require('../config/blockchain');
@@ -124,13 +124,13 @@ router.post('/', authMiddleware, validateInvestment, asyncHandler(async (req, re
     ownership_percentage: ownershipPercentage,
     blockchain_tx_hash: blockchainData?.txHash,
     is_blockchain_verified: !!blockchainData?.success,
-    investment_type: useBlockchain ? 'blockchain' : 'traditional',
+    investment_type: (useBlockchain && blockchainData?.success) ? 'blockchain' : 'traditional',
     created_at: new Date().toISOString()
   };
   
   console.log('Investment record to insert:', investmentRecord);
   
-  const { data: investment, error: investmentError } = await supabase
+  const { data: investment, error: investmentError } = await supabaseAdmin
     .from('investments')
     .insert(investmentRecord)
     .select(`
@@ -163,27 +163,26 @@ router.post('/', authMiddleware, validateInvestment, asyncHandler(async (req, re
   const newTotalInvestment = currentTotalInvestment + investmentAmount;
   console.log('New total investment:', newTotalInvestment);
   
-  const { data: updatedCompany, error: updateError } = await supabase
+  const { data: updatedCompany, error: updateError } = await supabaseAdmin
     .from('companies')
     .update({
       total_investment: newTotalInvestment,
       updated_at: new Date().toISOString()
     })
     .eq('id', companyId)
-    .select('total_investment, investor_count')
-    .single();
+    .select('id, name, total_investment, investor_count');
     
   if (updateError) {
     console.error('❌ Company update error:', updateError);
   } else {
-    console.log('✅ Company updated successfully:', updatedCompany);
+    console.log('✅ Company updated successfully:', updatedCompany?.[0] || updatedCompany);
   }
   
   // Update investor count separately
   console.log('👥 Updating investor count...');
   
   // First, get current unique investor count
-  const { count: uniqueInvestors, error: countQueryError } = await supabase
+  const { count: uniqueInvestors, error: countQueryError } = await supabaseAdmin
     .from('investments')
     .select('investor_id', { count: 'exact' })
     .eq('company_id', companyId);
@@ -194,7 +193,7 @@ router.post('/', authMiddleware, validateInvestment, asyncHandler(async (req, re
     console.log('📊 Current investor count:', uniqueInvestors);
     
     // Update the company with new investor count
-    const { error: investorCountUpdateError } = await supabase
+    const { error: investorCountUpdateError } = await supabaseAdmin
       .from('companies')
       .update({ investor_count: uniqueInvestors })
       .eq('id', companyId);
@@ -208,12 +207,12 @@ router.post('/', authMiddleware, validateInvestment, asyncHandler(async (req, re
 
   // Create activity log
   console.log('📝 Creating activity log...');
-  const { data: activityLog, error: activityError } = await supabase
+  const { data: activityLog, error: activityError } = await supabaseAdmin
     .from('user_activities')
     .insert({
       user_id: investorId,
       activity_type: 'investment_made',
-      description: `Invested $${investmentAmount} in ${company.name}`,
+      description: `Invested ${useBlockchain ? investmentAmount + ' ETH' : '$' + investmentAmount} in ${company.name}`,
       metadata: { 
         companyId, 
         amount: investmentAmount,
@@ -231,6 +230,41 @@ router.post('/', authMiddleware, validateInvestment, asyncHandler(async (req, re
 
   // Send notification to company owner (you can implement this later)
   // await sendNotification(company.owner_id, 'new_investment', {...});
+
+  // Emit real-time updates via Socket.IO
+  try {
+    const io = req.app.get('io');
+    if (io) {
+      // Notify the investing user (portfolio updates)
+      io.to(`user:${investorId}`).emit('portfolio:updated', {
+        type: 'investment-created',
+        investmentId: investment.id,
+        amount: investment.amount,
+        companyId,
+        timestamp: Date.now()
+      });
+
+      // Notify company room for dashboards listening to company changes
+      io.to(`company:${companyId}`).emit('investment:created', {
+        id: investment.id,
+        amount: investment.amount,
+        investmentType: investment.investment_type,
+        isBlockchainVerified: investment.is_blockchain_verified,
+        companyId,
+        companyName: company.name,
+        createdAt: investment.created_at
+      });
+
+      // Also broadcast updated company aggregates (best-effort)
+      io.to(`company:${companyId}`).emit('company:updated', {
+        id: companyId,
+        totalInvestment: newTotalInvestment,
+        investorCount: uniqueInvestors
+      });
+    }
+  } catch (e) {
+    console.warn('Socket emit failed:', e.message);
+  }
 
   res.status(201).json({
     success: true,

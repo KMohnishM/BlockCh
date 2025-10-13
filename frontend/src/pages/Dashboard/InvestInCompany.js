@@ -1,12 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { 
   DollarSign, 
-  TrendingUp, 
-  Shield, 
   ArrowLeft,
-  Users,
-  Calendar,
   Building2,
   AlertCircle,
   CheckCircle,
@@ -21,6 +17,8 @@ import LoadingSpinner from '../../components/UI/LoadingSpinner';
 // Utils
 import { formatCurrency, formatNumber, formatPercentage } from '../../utils/helpers';
 import { apiMethods } from '../../services/api';
+import web3Service from '../../utils/web3';
+import toast from 'react-hot-toast';
 
 // Store
 import useAuthStore from '../../store/authStore';
@@ -29,7 +27,7 @@ import useWalletStore from '../../store/walletStore';
 const InvestInCompany = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { user, isAuthenticated } = useAuthStore();
+  const { isAuthenticated } = useAuthStore();
   const { address: walletAddress, isConnected } = useWalletStore();
 
   const [company, setCompany] = useState(null);
@@ -40,21 +38,7 @@ const InvestInCompany = () => {
   const [paymentMethod, setPaymentMethod] = useState('traditional');
   const [showConfirmation, setShowConfirmation] = useState(false);
 
-  useEffect(() => {
-    if (!isAuthenticated) {
-      navigate('/login', { 
-        state: { 
-          returnUrl: `/companies/${id}/invest`,
-          message: 'Please login to invest in companies'
-        }
-      });
-      return;
-    }
-
-    fetchCompany();
-  }, [id, isAuthenticated, navigate]);
-
-  const fetchCompany = async () => {
+  const fetchCompany = useCallback(async () => {
     try {
       setIsLoading(true);
       setError(null);
@@ -72,7 +56,21 @@ const InvestInCompany = () => {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [id]);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      navigate('/login', { 
+        state: { 
+          returnUrl: `/companies/${id}/invest`,
+          message: 'Please login to invest in companies'
+        }
+      });
+      return;
+    }
+
+    fetchCompany();
+  }, [id, isAuthenticated, navigate, fetchCompany]);
 
   const calculateOwnership = () => {
     if (!investmentAmount || !company?.valuation) return 0;
@@ -87,9 +85,25 @@ const InvestInCompany = () => {
       return;
     }
 
-    if (parseFloat(investmentAmount) < 100) {
-      setError('Minimum investment amount is $100');
-      return;
+    if (paymentMethod === 'traditional') {
+      if (parseFloat(investmentAmount) < 100) {
+        setError('Minimum investment amount is $100');
+        return;
+      }
+    } else {
+      // blockchain path: treat amount as ETH
+      if (!isConnected) {
+        setError('Connect your wallet to invest on-chain');
+        return;
+      }
+      if (!company?.tokenId) {
+        setError('Company is not verified on-chain yet');
+        return;
+      }
+      if (parseFloat(investmentAmount) < 0.0001) {
+        setError('Minimum on-chain investment is 0.0001 ETH');
+        return;
+      }
     }
 
     setShowConfirmation(true);
@@ -100,28 +114,60 @@ const InvestInCompany = () => {
       setIsInvesting(true);
       setError(null);
 
-      const investmentData = {
-        companyId: id,
-        amount: parseFloat(investmentAmount),
-        paymentMethod,
-        walletAddress: paymentMethod === 'blockchain' ? walletAddress : null
-      };
+      const useBlockchain = paymentMethod === 'blockchain';
 
-      console.log('Creating investment:', investmentData);
+      if (useBlockchain) {
+        // client-signed on-chain flow: amount is in ETH
+        const amountEth = parseFloat(investmentAmount);
+        if (!isConnected || !walletAddress) {
+          setError('Connect your wallet to invest on-chain');
+          setShowConfirmation(false);
+          return;
+        }
+        if (!company?.tokenId) {
+          setError('Company is not verified on-chain yet');
+          setShowConfirmation(false);
+          return;
+        }
 
-      const response = await apiMethods.investments.create(investmentData);
+        // Send tx via MetaMask
+  const { txHash } = await web3Service.investInCompany(company.tokenId, amountEth);
+        toast.success('On-chain transaction confirmed');
 
-      if (response.data.success) {
-        // Success! Navigate to portfolio or show success message
+        // Record it in backend
+        await apiMethods.blockchain.investInCompany({
+          companyId: id,
+          amount: amountEth,
+          txHash
+        });
+
         navigate('/portfolio', {
           state: {
-            message: `Successfully invested $${formatCurrency(investmentAmount)} in ${company.name}!`,
+            message: `Successfully invested ${amountEth} ETH in ${company.name}!`,
             type: 'success'
           }
         });
       } else {
-        setError(response.data.message || 'Investment failed');
-        setShowConfirmation(false);
+        // traditional flow: amount in USD
+        const investmentData = {
+          companyId: id,
+          amount: parseFloat(investmentAmount),
+          useBlockchain: false,
+          walletAddress: null
+        };
+
+        const response = await apiMethods.investments.create(investmentData);
+        if (response.data.success) {
+          navigate('/portfolio', {
+            state: {
+              message: `Successfully invested $${formatCurrency(investmentAmount)} in ${company.name}!`,
+              type: 'success'
+            }
+          });
+        } else {
+          setError(response.data.message || 'Investment failed');
+          setShowConfirmation(false);
+        }
       }
     } catch (error) {
       console.error('Investment error:', error);
@@ -254,18 +300,20 @@ const InvestInCompany = () => {
                 {/* Investment Amount */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Investment Amount (USD)
+                    Investment Amount ({paymentMethod === 'blockchain' ? 'ETH' : 'USD'})
                   </label>
                   <div className="relative">
-                    <DollarSign className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
+                    {paymentMethod === 'traditional' && (
+                      <DollarSign className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
+                    )}
                     <input
                       type="number"
                       value={investmentAmount}
                       onChange={(e) => setInvestmentAmount(e.target.value)}
-                      className="input pl-10"
-                      placeholder="Enter amount (minimum $100)"
-                      min="100"
-                      step="1"
+                      className={`input ${paymentMethod === 'traditional' ? 'pl-10' : ''}`}
+                      placeholder={paymentMethod === 'blockchain' ? 'Enter amount in ETH (e.g., 0.01)' : 'Enter amount (minimum $100)'}
+                      min={paymentMethod === 'blockchain' ? '0.0001' : '100'}
+                      step={paymentMethod === 'blockchain' ? '0.0001' : '1'}
                       required
                     />
                   </div>
@@ -310,7 +358,7 @@ const InvestInCompany = () => {
                         checked={paymentMethod === 'blockchain'}
                         onChange={(e) => setPaymentMethod(e.target.value)}
                         className="h-4 w-4 text-primary-600"
-                        disabled={!isConnected}
+                        disabled={!isConnected || !company?.isBlockchainVerified}
                       />
                       <label htmlFor="blockchain" className="ml-3 flex items-center">
                         <Wallet className="w-5 h-5 text-gray-400 mr-2" />
@@ -318,6 +366,7 @@ const InvestInCompany = () => {
                           <div className="text-sm font-medium text-gray-900">
                             Blockchain Payment
                             {!isConnected && <span className="text-red-500 ml-1">(Wallet not connected)</span>}
+                            {isConnected && !company?.isBlockchainVerified && <span className="text-amber-600 ml-1">(Company not verified on-chain)</span>}
                           </div>
                           <div className="text-xs text-gray-500">Pay with cryptocurrency</div>
                         </div>
@@ -333,12 +382,18 @@ const InvestInCompany = () => {
                     <div className="space-y-2 text-sm">
                       <div className="flex justify-between">
                         <span className="text-gray-600">Investment Amount</span>
-                        <span className="font-medium">${formatCurrency(investmentAmount)}</span>
+                        <span className="font-medium">
+                          {paymentMethod === 'blockchain' 
+                            ? `${investmentAmount} ETH` 
+                            : `$${formatCurrency(investmentAmount)}`}
+                        </span>
                       </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Estimated Ownership</span>
-                        <span className="font-medium">{formatPercentage(calculateOwnership())}</span>
-                      </div>
+                      {paymentMethod === 'traditional' && (
+                        <div className="flex justify-between">
+                          <span className="text-gray-600">Estimated Ownership</span>
+                          <span className="font-medium">{formatPercentage(calculateOwnership())}</span>
+                        </div>
+                      )}
                       <div className="flex justify-between">
                         <span className="text-gray-600">Payment Method</span>
                         <span className="font-medium capitalize">{paymentMethod}</span>
@@ -357,7 +412,12 @@ const InvestInCompany = () => {
                   </Link>
                   <button
                     type="submit"
-                    disabled={!investmentAmount || parseFloat(investmentAmount) < 100}
+                    disabled={
+                      !investmentAmount ||
+                      (paymentMethod === 'traditional' 
+                        ? parseFloat(investmentAmount) < 100 
+                        : parseFloat(investmentAmount) < 0.0001 || !isConnected || !company?.isBlockchainVerified || !company?.tokenId)
+                    }
                     className="flex-1 btn btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <DollarSign className="w-4 h-4 mr-2" />

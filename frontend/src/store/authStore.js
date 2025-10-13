@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { apiMethods } from '../services/api';
+import api, { apiMethods } from '../services/api';
 import socketService from '../services/socket';
 
 const useAuthStore = create(
@@ -29,6 +29,9 @@ const useAuthStore = create(
             isLoading: false
           });
 
+          // Set axios auth header immediately to avoid 401s on initial protected calls
+          api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+
           // Connect to WebSocket after successful login
           socketService.connect(user.id);
           
@@ -52,6 +55,9 @@ const useAuthStore = create(
             authMethod: 'email',
             isLoading: false
           });
+
+          // Set axios auth header
+          api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
 
           // Connect to WebSocket after successful registration
           socketService.connect(user.id);
@@ -78,6 +84,9 @@ const useAuthStore = create(
             isLoading: false
           });
 
+          // Set axios auth header
+          api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+
           // Connect to WebSocket after successful wallet auth
           socketService.connect(user.id);
           
@@ -96,6 +105,8 @@ const useAuthStore = create(
         } finally {
           // Disconnect from WebSocket
           socketService.disconnect();
+          // Clear axios auth header
+          delete api.defaults.headers.common['Authorization'];
           
           set({
             user: null,
@@ -124,6 +135,8 @@ const useAuthStore = create(
         if (!token) return;
 
         try {
+          // Ensure axios header is set before calling /me
+          api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
           const response = await apiMethods.auth.me();
           const user = response.data.data.user;
           

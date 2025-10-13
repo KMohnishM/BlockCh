@@ -1,21 +1,58 @@
 
-import React, { useEffect, useState } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import React, { useEffect, useState, useCallback } from 'react';
+import { useParams, Link } from 'react-router-dom';
 import Card from '../../components/UI/Card';
 import LoadingSpinner from '../../components/UI/LoadingSpinner';
 import { apiMethods } from '../../services/api';
-import { formatCurrency, formatNumber, formatDate, formatPercentage } from '../../utils/helpers';
-import { DollarSign, Users, Calendar, Building2, ArrowLeft, TrendingUp, AlertCircle } from 'lucide-react';
+import socketService from '../../utils/socket';
+import { formatCurrency, formatNumber, formatDate } from '../../utils/helpers';
+import { DollarSign, Users, Calendar, Building2, ArrowLeft, TrendingUp, AlertCircle, ShieldCheck, ShieldAlert } from 'lucide-react';
+import toast from 'react-hot-toast';
 
 const CompanyDetail = () => {
   const { id } = useParams();
-  const navigate = useNavigate();
   const [company, setCompany] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [verifying, setVerifying] = useState(false);
+
+  const handleCompanySocketUpdate = useCallback((data) => {
+    if (!company || !data) return;
+    // Apply partial updates when totals change
+    if (data.id === company.id) {
+      setCompany(prev => ({
+        ...prev,
+        totalInvestment: data.totalInvestment ?? prev.totalInvestment,
+        investorCount: data.investorCount ?? prev.investorCount,
+        isBlockchainVerified: data.isBlockchainVerified ?? prev.isBlockchainVerified,
+        tokenId: data.tokenId ?? prev.tokenId
+      }));
+    }
+  }, [company]);
 
   useEffect(() => {
     fetchCompany();
+    // Subscribe to company room for live updates
+    if (id) {
+      socketService.connect();
+      socketService.joinCompanyRoom(id);
+      socketService.on('company:updated', handleCompanySocketUpdate);
+      socketService.on('investment:created', (evt) => {
+        if (evt.companyId === id) {
+          // Optimistically increment totals; actual values will come via company:updated
+          setCompany(prev => prev ? ({
+            ...prev,
+            totalInvestment: (prev.totalInvestment || 0) + (evt.amount || 0),
+            investorCount: prev.investorCount // keep until server sends accurate unique count
+          }) : prev);
+        }
+      });
+    }
+
+    return () => {
+      socketService.off('company:updated', handleCompanySocketUpdate);
+      socketService.off('investment:created');
+    };
     // eslint-disable-next-line
   }, [id]);
 
@@ -33,6 +70,25 @@ const CompanyDetail = () => {
       setError('Company not found or failed to load');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const verifyOnChain = async () => {
+    if (!id) return;
+    try {
+      setVerifying(true);
+      const res = await apiMethods.companies.verifyBlockchain(id);
+      if (res.data?.success) {
+        const { tokenId } = res.data.data || {};
+        toast.success('Company verified on-chain');
+        setCompany(prev => prev ? { ...prev, isBlockchainVerified: true, tokenId: tokenId ?? prev.tokenId } : prev);
+      } else {
+        toast.error(res.data?.message || 'Verification failed');
+      }
+    } catch (e) {
+      toast.error(e?.response?.data?.message || 'Verification failed');
+    } finally {
+      setVerifying(false);
     }
   };
 
@@ -84,6 +140,19 @@ const CompanyDetail = () => {
                 <p className="text-sm text-gray-500">{company.industry}</p>
               </div>
             </div>
+            <div className="flex items-center text-sm">
+              {company.isBlockchainVerified ? (
+                <span className="inline-flex items-center text-green-600 font-medium">
+                  <ShieldCheck className="w-4 h-4 mr-1" />
+                  Verified on-chain{company.tokenId ? ` · Token #${company.tokenId}` : ''}
+                </span>
+              ) : (
+                <span className="inline-flex items-center text-amber-600 font-medium">
+                  <ShieldAlert className="w-4 h-4 mr-1" />
+                  Not verified on-chain
+                </span>
+              )}
+            </div>
             <div className="flex items-center text-sm text-gray-600">
               <Calendar className="w-4 h-4 mr-2" />
               Founded {company.foundedDate ? formatDate(company.foundedDate) : 'N/A'}
@@ -98,15 +167,15 @@ const CompanyDetail = () => {
             </div>
             <div className="flex items-center text-sm text-gray-600">
               <DollarSign className="w-4 h-4 mr-2" />
-              Funding Goal: <span className="ml-1 font-medium text-gray-900">{formatCurrency(company.fundingGoal)}</span>
+              Funding Goal: <span className="ml-1 font-medium text-gray-900">{formatCurrency(company.fundingGoal || company.valuation || 0)}</span>
             </div>
             <div className="flex items-center text-sm text-gray-600">
               <DollarSign className="w-4 h-4 mr-2" />
-              Raised: <span className="ml-1 font-medium text-gray-900">{formatCurrency(company.total_investment || 0)}</span>
+              Raised: <span className="ml-1 font-medium text-gray-900">{formatCurrency(company.totalInvestment || 0)}</span>
             </div>
             <div className="flex items-center text-sm text-gray-600">
               <Users className="w-4 h-4 mr-2" />
-              Investors: <span className="ml-1 font-medium text-gray-900">{formatNumber(company.investor_count || 0)}</span>
+              Investors: <span className="ml-1 font-medium text-gray-900">{formatNumber(company.investorCount || 0)}</span>
             </div>
           </div>
         </Card>
@@ -117,26 +186,19 @@ const CompanyDetail = () => {
             <div className="flex justify-between text-sm">
               <span className="text-gray-600">Funding Progress</span>
               <span className="font-medium text-gray-900">
-                {company.fundingGoal && company.total_investment
-                  ? Math.round((company.total_investment / company.fundingGoal) * 100)
-                  : 0}%
+                {Math.round(((company.totalInvestment || 0) / (company.fundingGoal || company.valuation || 1)) * 100)}%
               </span>
             </div>
             <div className="w-full bg-gray-200 rounded-full h-2">
               <div
                 className="bg-primary-600 h-2 rounded-full transition-all"
                 style={{
-                  width: `${Math.min(
-                    company.fundingGoal && company.total_investment
-                      ? (company.total_investment / company.fundingGoal) * 100
-                      : 0,
-                    100
-                  )}%`
+                  width: `${Math.min(((company.totalInvestment || 0) / (company.fundingGoal || company.valuation || 1)) * 100, 100)}%`
                 }}
               />
             </div>
             <p className="text-xs text-gray-500">
-              Goal: {formatCurrency(company.fundingGoal)} | Raised: {formatCurrency(company.total_investment || 0)}
+              Goal: {formatCurrency(company.fundingGoal || company.valuation || 0)} | Raised: {formatCurrency(company.totalInvestment || 0)}
             </p>
 
             <div className="pt-4 flex space-x-4">
@@ -146,12 +208,15 @@ const CompanyDetail = () => {
               >
                 Invest
               </Link>
-              <Link
-                to="/companies"
-                className="flex-1 btn btn-outline"
+              <button
+                onClick={verifyOnChain}
+                disabled={company.isBlockchainVerified || verifying}
+                className={`flex-1 btn ${company.isBlockchainVerified ? 'btn-disabled' : 'btn-outline'}`}
+                title={company.isBlockchainVerified ? 'Already verified' : 'Verify on-chain'}
               >
-                Back
-              </Link>
+                {verifying ? <LoadingSpinner size="small" className="mr-2" /> : null}
+                {company.isBlockchainVerified ? 'Verified' : 'Verify on-chain'}
+              </button>
             </div>
           </div>
         </Card>

@@ -1,5 +1,5 @@
 const express = require('express');
-const { supabase } = require('../config/supabase');
+const { supabaseAdmin } = require('../config/supabase');
 const { authMiddleware } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
 
@@ -9,8 +9,11 @@ const router = express.Router();
 router.get('/', authMiddleware, asyncHandler(async (req, res) => {
   const userId = req.user.id;
 
+  // Prevent caching to ensure fresh portfolio data after changes
+  res.set('Cache-Control', 'no-store');
+
   // Get all investments with company details
-  const { data: investments, error } = await supabase
+  const { data: investments, error } = await supabaseAdmin
     .from('investments')
     .select(`
       *,
@@ -128,6 +131,8 @@ router.get('/performance', authMiddleware, asyncHandler(async (req, res) => {
   const userId = req.user.id;
   const { period = '1M' } = req.query;
 
+  res.set('Cache-Control', 'no-store');
+
   try {
     // Simplified performance data for now
     const performanceData = [
@@ -173,8 +178,10 @@ router.get('/performance', authMiddleware, asyncHandler(async (req, res) => {
 router.get('/analytics', authMiddleware, asyncHandler(async (req, res) => {
   const userId = req.user.id;
 
+  res.set('Cache-Control', 'no-store');
+
   // Complex analytics query
-  const { data: analytics, error } = await supabase.rpc('get_portfolio_analytics', {
+  const { data: analytics, error } = await supabaseAdmin.rpc('get_portfolio_analytics', {
     p_user_id: userId
   });
 

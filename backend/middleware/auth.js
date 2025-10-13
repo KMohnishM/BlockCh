@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const { supabase } = require('../config/supabase');
+const { supabaseAdmin } = require('../config/supabase');
 
 const authMiddleware = async (req, res, next) => {
   try {
@@ -16,7 +16,7 @@ const authMiddleware = async (req, res, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     
     // Get user from Supabase
-    const { data: user, error } = await supabase
+    const { data: user, error } = await supabaseAdmin
       .from('profiles')
       .select('*')
       .eq('id', decoded.userId)
@@ -70,7 +70,7 @@ const optionalAuthMiddleware = async (req, res, next) => {
     if (token) {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
       
-      const { data: user, error } = await supabase
+      const { data: user, error } = await supabaseAdmin
         .from('profiles')
         .select('*')
         .eq('id', decoded.userId)
@@ -120,7 +120,7 @@ const walletAuthMiddleware = async (req, res, next) => {
 
     // Here you would verify the wallet signature
     // This is a simplified version - in production, implement proper signature verification
-    const { data: user, error } = await supabase
+    const { data: user, error } = await supabaseAdmin
       .from('profiles')
       .select('*')
       .eq('wallet_address', walletAddress.toLowerCase())

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   PieChart, 
   TrendingUp, 
@@ -15,7 +15,7 @@ import {
 // Components
 import Card from '../../components/UI/Card';
 import LoadingSpinner from '../../components/UI/LoadingSpinner';
-import { IndustryPieChart, PortfolioTrendChart, InvestmentComparisonChart } from '../../components/Charts/RechartsComponents';
+import { IndustryPieChart, PortfolioTrendChart } from '../../components/Charts/RechartsComponents';
 
 // Utils
 import { formatCurrency, formatPercentage } from '../../utils/helpers';
@@ -42,6 +42,70 @@ const Portfolio = () => {
     { value: 'ALL', label: 'All Time' }
   ];
 
+  const fetchPortfolioData = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+      
+      const [summaryResp, perfResp, analyticsResp] = await Promise.all([
+        apiMethods.portfolio.getSummary(),
+        apiMethods.portfolio.getPerformance(timeRange),
+        apiMethods.portfolio.getAnalytics()
+      ]);
+
+      const summaryData = summaryResp.data?.data || {};
+      const perfData = perfResp.data?.data || {};
+      const analyticsData = analyticsResp.data?.data || {};
+
+      const s = summaryData.summary || {};
+      const industry = Array.isArray(summaryData.industryBreakdown) ? summaryData.industryBreakdown : [];
+      const perfHistory = Array.isArray(summaryData.performanceHistory) ? summaryData.performanceHistory : (Array.isArray(perfData.timeline) ? perfData.timeline : []);
+
+      // Map to UI expected fields
+      const mapped = {
+        totalValue: s.currentPortfolioValue || 0,
+        totalInvested: s.totalInvested || 0,
+        totalGainLoss: s.totalReturn || 0,
+        gainLossPercentage: s.totalReturnPercentage || 0,
+        // Pie expects dataKey "value"
+        industryAllocation: industry.map(it => ({ name: it.industry, value: it.currentValue })),
+        // Top holdings from investments (optional)
+        topHoldings: (summaryData.investments || [])
+          .sort((a, b) => (b.currentValue || 0) - (a.currentValue || 0))
+          .slice(0, 5)
+          .map(inv => ({
+            companyName: inv.company?.name || 'Unknown',
+            industry: inv.company?.industry || '—',
+            value: inv.currentValue || 0,
+            change: inv.returnPercentage || 0
+          })),
+        recentPerformance: perfHistory.map(p => ({
+          date: p.date,
+          portfolioValue: p.currentValue ?? p.value ?? 0,
+          totalInvested: p.investmentAmount ?? p.investment ?? 0
+        })),
+        riskScore: typeof analyticsData.riskScore === 'number' ? analyticsData.riskScore : 5
+      };
+
+      setPortfolioData(mapped);
+    } catch (error) {
+      console.error('Failed to fetch portfolio data:', error);
+      setError('Failed to load portfolio data. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [timeRange]);
+
+  const handlePortfolioUpdate = useCallback((data) => {
+    // Refetch to ensure all derived metrics and lists are fresh
+    fetchPortfolioData();
+  }, [fetchPortfolioData]);
+
+  const handlePriceUpdate = useCallback((data) => {
+    // Update portfolio data when prices change
+    fetchPortfolioData();
+  }, [fetchPortfolioData]);
+
   useEffect(() => {
     fetchPortfolioData();
     
@@ -55,47 +119,9 @@ const Portfolio = () => {
       socketService.off('portfolio:updated');
       socketService.off('price:update');
     };
-  }, [timeRange, user]);
+  }, [timeRange, user, fetchPortfolioData, handlePortfolioUpdate, handlePriceUpdate]);
 
-  const fetchPortfolioData = async () => {
-    try {
-      setIsLoading(true);
-      setError(null);
-      
-      const [summaryResponse, performanceResponse, analyticsResponse] = await Promise.all([
-        apiMethods.portfolio.getSummary(),
-        apiMethods.portfolio.getPerformance(timeRange),
-        apiMethods.portfolio.getAnalytics()
-      ]);
-
-      const portfolioInfo = {
-        ...summaryResponse.data,
-        performanceData: performanceResponse.data,
-        analytics: analyticsResponse.data
-      };
-      
-      setPortfolioData(portfolioInfo);
-    } catch (error) {
-      console.error('Failed to fetch portfolio data:', error);
-      setError('Failed to load portfolio data. Please try again.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handlePortfolioUpdate = (data) => {
-    setPortfolioData(prev => ({
-      ...prev,
-      totalValue: data.totalValue,
-      totalGainLoss: data.totalGainLoss,
-      gainLossPercentage: data.gainLossPercentage,
-    }));
-  };
-
-  const handlePriceUpdate = (data) => {
-    // Update portfolio data when prices change
-    fetchPortfolioData();
-  };
+  
 
   if (isLoading) {
     return (

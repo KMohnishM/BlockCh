@@ -39,8 +39,15 @@ class BlockchainService {
           this.signer || this.provider
         );
       }
-
-      console.log('✅ Blockchain service initialized successfully');
+      const net = await this.provider.getNetwork().catch(() => null);
+      const signerAddr = this.signer ? await this.signer.getAddress().catch(() => null) : null;
+      console.log('✅ Blockchain service initialized', {
+        rpc: process.env.BLOCKCHAIN_RPC_URL ? 'set' : 'missing',
+        contract: process.env.CONTRACT_ADDRESS || 'missing',
+        hasSigner: !!this.signer,
+        signerAddr,
+        network: net ? { chainId: net.chainId?.toString?.(), name: net.name } : null
+      });
     } catch (error) {
       console.error('❌ Failed to initialize blockchain service:', error);
     }
@@ -52,6 +59,15 @@ class BlockchainService {
       if (!this.contract) {
         throw new Error('Contract not initialized');
       }
+      const signerAddr = this.signer ? await this.signer.getAddress().catch(() => null) : null;
+      const net = this.provider ? await this.provider.getNetwork().catch(() => null) : null;
+      console.log('🧱 mintCompany()', {
+        name,
+        fromAddress,
+        signerAddr,
+        contractAddress: this.contract.target,
+        network: net ? { chainId: net.chainId?.toString?.(), name: net.name } : null
+      });
 
       const tx = await this.contract.mintCompany(
         name,
@@ -62,6 +78,7 @@ class BlockchainService {
       );
 
       const receipt = await tx.wait();
+      console.log('📦 mintCompany receipt', { txHash: tx.hash, status: receipt.status, logs: receipt.logs?.length });
       
       // Parse the event to get the token ID
       const event = receipt.logs.find(log => {
@@ -76,6 +93,25 @@ class BlockchainService {
       if (event) {
         const parsedEvent = this.contract.interface.parseLog(event);
         tokenId = parsedEvent.args.tokenId.toString();
+      }
+
+      // Fallback: detect ERC721 Transfer (mint) event to get tokenId
+      if (!tokenId && Array.isArray(receipt.logs)) {
+        const transferTopic = ethers.id('Transfer(address,address,uint256)');
+        for (const log of receipt.logs) {
+          if (log.address?.toLowerCase() === String(this.contract.target).toLowerCase() && log.topics?.[0] === transferTopic) {
+            // topics[1] = from, topics[2] = to, topics[3] = tokenId
+            const from = '0x' + log.topics[1].slice(26);
+            const to = '0x' + log.topics[2].slice(26);
+            const tid = BigInt(log.topics[3]).toString();
+            // Mint should be from zero address
+            if (from.toLowerCase() === '0x0000000000000000000000000000000000000000') {
+              tokenId = tid;
+              console.log('🔎 Derived tokenId from Transfer event', { tokenId, to });
+              break;
+            }
+          }
+        }
       }
 
       return {

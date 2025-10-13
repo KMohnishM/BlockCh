@@ -1,6 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const { body, validationResult } = require('express-validator');
 const { supabase, supabaseAdmin } = require('../config/supabase');
 const { asyncHandler } = require('../middleware/errorHandler');
@@ -41,18 +42,10 @@ const validateWalletAuth = [
   }),
   body('signature').exists().withMessage('Signature is required'),
   body('message').exists().withMessage('Message is required'),
-  body('fullName').optional().trim().isLength({ min: 1 }).withMessage('Full name is required'),
-  body('firstName').optional().trim().isLength({ min: 1 }).withMessage('First name is required'),
-  body('lastName').optional().trim().isLength({ min: 1 }).withMessage('Last name is required'),
-  // Custom validation to ensure either fullName OR (firstName AND lastName) is provided for new wallets
-  body().custom((_, { req }) => {
-    const { fullName, firstName, lastName } = req.body;
-    
-    if (!fullName && (!firstName || !lastName)) {
-      throw new Error('Either full name or both first name and last name are required');
-    }
-    return true;
-  })
+  // Name fields are optional for wallet-only auth; if absent, we'll create a minimal profile
+  body('fullName').optional().trim(),
+  body('firstName').optional().trim(),
+  body('lastName').optional().trim()
 ];
 
 // Traditional email/password registration
@@ -233,6 +226,7 @@ router.post('/login', validateLogin, asyncHandler(async (req, res) => {
 router.post('/wallet-auth', validateWalletAuth, asyncHandler(async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
+    console.warn('wallet-auth validation failed:', errors.array());
     return res.status(400).json({
       success: false,
       message: 'Validation failed',
@@ -241,6 +235,13 @@ router.post('/wallet-auth', validateWalletAuth, asyncHandler(async (req, res) =>
   }
 
   const { walletAddress, signature, message, fullName, firstName, lastName } = req.body;
+
+  // Server-side diagnostic log for wallet address
+  console.log('🔐 wallet-auth received:', {
+    walletAddress,
+    hasSignature: !!signature,
+    messagePreview: typeof message === 'string' ? message.slice(0, 40) + '…' : null
+  });
 
   // Handle name fields - accept either fullName or firstName/lastName
   let finalFirstName, finalLastName;
@@ -265,6 +266,7 @@ router.post('/wallet-auth', validateWalletAuth, asyncHandler(async (req, res) =>
       });
     }
   } catch (error) {
+    console.error('wallet-auth signature verification error:', error?.message || error);
     return res.status(401).json({
       success: false,
       message: 'Signature verification failed'
@@ -273,56 +275,139 @@ router.post('/wallet-auth', validateWalletAuth, asyncHandler(async (req, res) =>
 
   const normalizedAddress = walletAddress.toLowerCase();
 
-  // Check if wallet is already registered
-  let { data: profile, error } = await supabaseAdmin
-    .from('profiles')
-    .select('*')
-    .eq('wallet_address', normalizedAddress)
-    .single();
+  // If caller is already authenticated, link wallet to existing profile
+  let linkUserId = null;
+  const bearer = req.header('Authorization');
+  if (bearer?.startsWith('Bearer ')) {
+    try {
+      const decoded = jwt.verify(bearer.replace('Bearer ', ''), process.env.JWT_SECRET);
+      linkUserId = decoded?.userId || null;
+    } catch (_) {
+      // ignore token errors for linking; proceed as unauthenticated flow
+      linkUserId = null;
+    }
+  }
 
-  if (error && error.code !== 'PGRST116') {
+  // Ensure service role key is available for admin ops
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    console.error('wallet-auth error: SUPABASE_SERVICE_ROLE_KEY is missing. Wallet auth requires admin privileges.');
     return res.status(500).json({
       success: false,
-      message: 'Database error'
+      message: 'Server misconfiguration: SUPABASE_SERVICE_ROLE_KEY is missing'
     });
   }
 
-  // If user doesn't exist, create new profile
-  if (!profile) {
-    const userId = crypto.randomUUID();
-    
-    const { data: newProfile, error: createError } = await supabaseAdmin
+  // Check if wallet is already registered
+  let profile = null;
+  try {
+    const { data, error } = await supabaseAdmin
       .from('profiles')
-      .insert({
-        id: userId,
-        wallet_address: normalizedAddress,
-        first_name: finalFirstName,
-        last_name: finalLastName,
-        auth_method: 'web3',
-        created_at: new Date().toISOString()
-      })
-      .select()
+      .select('*')
+      .eq('wallet_address', normalizedAddress)
       .single();
-
-    if (createError) {
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to create wallet profile'
-      });
+    if (error && error.code !== 'PGRST116') {
+      console.error('wallet-auth select error:', { code: error.code, message: error.message });
+      return res.status(500).json({ success: false, message: 'Database error (select)' });
     }
+    profile = data || null;
+  } catch (e) {
+    console.error('wallet-auth unexpected select exception:', e);
+    return res.status(500).json({ success: false, message: 'Database error (select exception)' });
+  }
 
-    profile = newProfile;
+  // If linking to an existing authenticated user
+  if (linkUserId) {
+    // Ensure no other account has this wallet already
+    if (profile && profile.id !== linkUserId) {
+      return res.status(409).json({ success: false, message: 'This wallet is already linked to another account' });
+    }
+    // Fetch the target profile
+    const { data: existingProfile, error: fetchErr } = await supabaseAdmin
+      .from('profiles')
+      .select('*')
+      .eq('id', linkUserId)
+      .single();
+    if (fetchErr || !existingProfile) {
+      return res.status(401).json({ success: false, message: 'Invalid session for wallet linking' });
+    }
+    // Update existing profile with wallet address and optional names if empty
+    const updates = {
+      wallet_address: normalizedAddress,
+      last_login: new Date().toISOString(),
+    };
+    if (!existingProfile.first_name && finalFirstName) updates.first_name = finalFirstName;
+    if (!existingProfile.last_name && finalLastName) updates.last_name = finalLastName;
+    const { data: updated, error: updErr } = await supabaseAdmin
+      .from('profiles')
+      .update(updates)
+      .eq('id', linkUserId)
+      .select('*')
+      .single();
+    if (updErr) {
+      console.error('wallet-auth link update error:', updErr);
+      return res.status(500).json({ success: false, message: 'Failed to link wallet to profile' });
+    }
+    profile = updated;
+  }
+
+  // If user doesn't exist and no link, create Supabase Auth user then profile (to satisfy FK profiles.id -> auth.users.id)
+  if (!profile && !linkUserId) {
+    try {
+      const derivedEmail = `wallet+${normalizedAddress}@vyaapar.local`;
+      const randomPassword = crypto.randomBytes(16).toString('hex');
+      const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
+        email: derivedEmail,
+        password: randomPassword,
+        email_confirm: true,
+        user_metadata: { authMethod: 'web3', walletAddress: normalizedAddress }
+      });
+      if (authError) {
+        console.error('wallet-auth createUser error:', authError);
+        return res.status(500).json({ success: false, message: 'Failed to create auth user for wallet' });
+      }
+
+      const authUserId = authData.user.id;
+
+      const { data: newProfile, error: createError } = await supabaseAdmin
+        .from('profiles')
+        .insert({
+          id: authUserId,
+          email: derivedEmail,
+          wallet_address: normalizedAddress,
+          first_name: finalFirstName,
+          last_name: finalLastName,
+          auth_method: 'web3',
+          created_at: new Date().toISOString()
+        })
+        .select()
+        .single();
+      if (createError) {
+        console.error('wallet-auth insert error:', { code: createError.code, message: createError.message });
+        return res.status(500).json({ success: false, message: 'Failed to create wallet profile' });
+      }
+      profile = newProfile;
+    } catch (e) {
+      console.error('wallet-auth unexpected user/profile creation exception:', e);
+      return res.status(500).json({ success: false, message: 'Failed to create wallet user/profile' });
+    }
   }
 
   // Update last login
-  await supabaseAdmin
-    .from('profiles')
-    .update({ last_login: new Date().toISOString() })
-    .eq('id', profile.id);
+  try {
+    const { error: lastLoginError } = await supabaseAdmin
+      .from('profiles')
+      .update({ last_login: new Date().toISOString() })
+      .eq('id', profile.id);
+    if (lastLoginError) {
+      console.warn('wallet-auth last_login update warning:', { code: lastLoginError.code, message: lastLoginError.message });
+    }
+  } catch (e) {
+    console.warn('wallet-auth last_login update exception:', e);
+  }
 
   // Generate JWT token
   const token = jwt.sign(
-    { userId: profile.id, walletAddress: normalizedAddress },
+    { userId: profile.id, walletAddress: profile.wallet_address || normalizedAddress },
     process.env.JWT_SECRET,
     { expiresIn: process.env.JWT_EXPIRES_IN || '24h' }
   );

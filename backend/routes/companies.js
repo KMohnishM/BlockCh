@@ -1,6 +1,6 @@
 const express = require('express');
 const { body, validationResult, query } = require('express-validator');
-const { supabase } = require('../config/supabase');
+const { supabase, supabaseAdmin } = require('../config/supabase');
 const { authMiddleware, optionalAuthMiddleware } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
 const blockchainService = require('../config/blockchain');
@@ -29,6 +29,7 @@ router.post('/register', authMiddleware, validateCompanyRegistration, asyncHandl
 
   const { name, description, industry, valuation, useBlockchain = true } = req.body;
   const userId = req.user.id;
+  console.log('🧾 Register company request:', { name, useBlockchain, walletAddress: req.user.walletAddress });
 
   // Check if company name already exists
   const { data: existingCompany } = await supabase
@@ -50,6 +51,14 @@ router.post('/register', authMiddleware, validateCompanyRegistration, asyncHandl
   // Handle blockchain registration
   if (useBlockchain && req.user.walletAddress) {
     try {
+      console.log('⛓️  Attempting on-chain mint with config:', {
+        hasProvider: !!blockchainService.provider,
+        hasSigner: !!blockchainService.signer,
+        hasContract: !!blockchainService.contract,
+        hasRPC: !!process.env.BLOCKCHAIN_RPC_URL,
+        hasAddress: !!process.env.CONTRACT_ADDRESS,
+        hasPK: !!process.env.PRIVATE_KEY
+      });
       const tokenURI = `https://vyaapar.ai/company/${name.replace(/\s+/g, '-').toLowerCase()}`;
       
       blockchainData = await blockchainService.mintCompany(
@@ -63,18 +72,19 @@ router.post('/register', authMiddleware, validateCompanyRegistration, asyncHandl
 
       if (blockchainData.success) {
         tokenId = blockchainData.tokenId;
+        console.log('✅ Mint succeeded:', { tokenId, txHash: blockchainData.txHash });
       } else {
-        console.error('Blockchain registration failed:', blockchainData.error);
+        console.error('❌ Blockchain mint failed:', blockchainData.error);
         // Continue with database-only registration
       }
     } catch (error) {
-      console.error('Blockchain error:', error);
+      console.error('❌ Blockchain error during register:', error);
       // Continue with database-only registration
     }
   }
 
   // Create company record in database
-  const { data: company, error: dbError } = await supabase
+  const { data: company, error: dbError } = await supabaseAdmin
     .from('companies')
     .insert({
       name,
@@ -98,7 +108,7 @@ router.post('/register', authMiddleware, validateCompanyRegistration, asyncHandl
     .single();
 
   if (dbError) {
-    console.error('Database error:', dbError);
+    console.error('❌ Database insert error (company):', dbError);
     return res.status(500).json({
       success: false,
       message: 'Failed to register company'
@@ -106,7 +116,7 @@ router.post('/register', authMiddleware, validateCompanyRegistration, asyncHandl
   }
 
   // Create activity log
-  await supabase
+  await supabaseAdmin
     .from('user_activities')
     .insert({
       user_id: userId,
@@ -574,6 +584,149 @@ router.get('/user/my-companies', authMiddleware, asyncHandler(async (req, res) =
     success: true,
     data: { companies: enhancedCompanies }
   });
+}));
+
+// Debug: company blockchain status
+router.get('/:id/blockchain-status', authMiddleware, asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { data: company, error } = await supabase
+    .from('companies')
+    .select('id, name, is_blockchain_verified, blockchain_token_id, blockchain_tx_hash')
+    .eq('id', id)
+    .single();
+
+  if (error || !company) {
+    return res.status(404).json({ success: false, message: 'Company not found' });
+  }
+
+  let onchain = null;
+  if (company.blockchain_token_id && blockchainService.contract) {
+    try {
+      const result = await blockchainService.getCompany(company.blockchain_token_id);
+      onchain = result.success ? result.data : { error: result.error };
+    } catch (e) {
+      onchain = { error: e.message };
+    }
+  }
+
+  res.json({
+    success: true,
+    data: {
+      db: company,
+      onchain,
+      service: {
+        hasProvider: !!blockchainService.provider,
+        hasSigner: !!blockchainService.signer,
+        hasContract: !!blockchainService.contract,
+      },
+      env: {
+        rpc: !!process.env.BLOCKCHAIN_RPC_URL,
+        contract: !!process.env.CONTRACT_ADDRESS,
+        privateKey: !!process.env.PRIVATE_KEY
+      }
+    }
+  });
+}));
+
+// Verify or mint a company on blockchain (owner only)
+router.post('/:id/verify-blockchain', authMiddleware, asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const userId = req.user.id;
+
+  // Fetch minimal company info
+  const { data: company, error: companyError } = await supabase
+    .from('companies')
+    .select('id, owner_id, name, description, industry, valuation, blockchain_token_id, is_blockchain_verified')
+    .eq('id', id)
+    .single();
+
+  if (companyError || !company) {
+    return res.status(404).json({ success: false, message: 'Company not found' });
+  }
+
+  if (company.owner_id !== userId) {
+    return res.status(403).json({ success: false, message: 'Only the owner can verify on-chain' });
+  }
+
+  // If already verified, optionally re-check on-chain and return
+  if (company.is_blockchain_verified && company.blockchain_token_id) {
+    try {
+      const onchain = await blockchainService.getCompany(company.blockchain_token_id);
+      if (!onchain.success) {
+        return res.status(200).json({ success: true, message: 'Already verified (on-chain fetch failed, but DB shows verified)', data: { tokenId: company.blockchain_token_id, verified: true } });
+      }
+      return res.status(200).json({ success: true, message: 'Already verified', data: { tokenId: company.blockchain_token_id, verified: true, blockchain: onchain.data } });
+    } catch (_) {
+      return res.status(200).json({ success: true, message: 'Already verified', data: { tokenId: company.blockchain_token_id, verified: true } });
+    }
+  }
+
+  // If token exists but not flagged, try verifying against chain
+  if (company.blockchain_token_id && !company.is_blockchain_verified) {
+    try {
+      const onchain = await blockchainService.getCompany(company.blockchain_token_id);
+      if (onchain.success) {
+        const { error: updErr } = await supabase
+          .from('companies')
+          .update({ is_blockchain_verified: true })
+          .eq('id', id);
+        if (!updErr) {
+          const io = req.app.get('io');
+          io?.to(`company:${id}`).emit('company:updated', { id, isBlockchainVerified: true, tokenId: company.blockchain_token_id });
+        }
+        return res.json({ success: true, message: 'Verification updated from existing token', data: { tokenId: company.blockchain_token_id, verified: true, blockchain: onchain.data } });
+      }
+    } catch (_) {
+      // fall through to mint
+    }
+  }
+
+  // Otherwise mint a new company token if wallet is connected
+  if (!req.user.walletAddress) {
+    return res.status(400).json({ success: false, message: 'Connect a wallet to verify on-chain' });
+  }
+
+  const tokenURI = `https://vyaapar.ai/company/${company.name.replace(/\s+/g, '-').toLowerCase()}`;
+  try {
+    const result = await blockchainService.mintCompany(
+      company.name,
+      company.description,
+      company.industry,
+      company.valuation,
+      tokenURI,
+      req.user.walletAddress
+    );
+
+    if (!result?.success) {
+      return res.status(502).json({ success: false, message: `Mint failed: ${result?.error || 'unknown error'}` });
+    }
+
+    const { tokenId, txHash } = result;
+    const { data: updated, error: updateError } = await supabaseAdmin
+      .from('companies')
+      .update({
+        blockchain_token_id: tokenId,
+        blockchain_tx_hash: txHash,
+        is_blockchain_verified: true,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', id)
+      .select('id, name, blockchain_token_id, is_blockchain_verified')
+      .single();
+
+    if (updateError) {
+      return res.status(500).json({ success: false, message: 'Minted but failed to update database' });
+    }
+
+    // Emit update to subscribers
+    const io = req.app.get('io');
+    io?.to(`company:${id}`).emit('company:updated', { id, isBlockchainVerified: true, tokenId });
+
+    return res.json({ success: true, message: 'Company verified on-chain', data: { tokenId, txHash, company: updated } });
+  } catch (err) {
+    console.error('verify-blockchain error:', err);
+    return res.status(500).json({ success: false, message: 'Blockchain verification failed' });
+  }
 }));
 
 module.exports = router;

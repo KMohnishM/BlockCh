@@ -84,6 +84,19 @@ vyaapar-ai/
 - Supabase account
 - Git
 
+### Blockchain Integration
+
+For detailed blockchain integration setup and testing instructions, please refer to our dedicated [BLOCKCHAIN_SETUP.md](BLOCKCHAIN_SETUP.md) guide. This comprehensive document includes:
+
+- Complete environment configuration for blockchain
+- Step-by-step local blockchain setup
+- Contract deployment instructions
+- Testing scripts explanation
+- Manual testing procedures
+- Troubleshooting common blockchain issues
+
+We highly recommend following this guide for proper blockchain functionality.
+
 ### Quick Setup
 
 1. **Clone the repository**
