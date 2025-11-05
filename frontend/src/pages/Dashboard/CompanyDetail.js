@@ -3,6 +3,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import Card from '../../components/UI/Card';
 import LoadingSpinner from '../../components/UI/LoadingSpinner';
+import CompanyVerification from '../../components/Verification/CompanyVerification';
 import { apiMethods } from '../../services/api';
 import socketService from '../../utils/socket';
 import { formatCurrency, formatNumber, formatDate } from '../../utils/helpers';
@@ -220,6 +221,11 @@ const CompanyDetail = () => {
             </div>
           </div>
         </Card>
+      </div>
+
+      {/* Verification and Risk Analysis */}
+      <div className="mt-6">
+        <CompanyVerification companyId={id} company={company} />
       </div>
 
       {/* Milestones, Funding Rounds, etc. can be added here */}

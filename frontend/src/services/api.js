@@ -136,6 +136,10 @@ const apiMethods = {
     getUserCompanies: () => api.get('/companies/user/my-companies'),
     verifyBlockchain: (id) => api.post(`/companies/${id}/verify-blockchain`),
     getBlockchainStatus: (id) => api.get(`/companies/${id}/blockchain-status`),
+    verifyEmail: (id, token) => api.post(`/companies/${id}/verify-email`, { token }),
+    getRiskAnalysis: (id) => api.get(`/companies/${id}/risk-analysis`),
+    searchByName: (name, mode = 'SW') => api.get('/companies/search/by-name', { params: { name, mode } }),
+    searchByPAN: (pan) => api.get('/companies/search/by-pan', { params: { pan } }),
   },
 
   // Investment endpoints

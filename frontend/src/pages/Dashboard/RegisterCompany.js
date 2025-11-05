@@ -1,7 +1,9 @@
 
 import React, { useState, useEffect } from 'react';
+import { Search } from 'lucide-react';
 import Card from '../../components/UI/Card';
 import LoadingSpinner from '../../components/UI/LoadingSpinner';
+import CINLookup from '../../components/CINLookup/CINLookup';
 import { apiMethods } from '../../services/api';
 import { useNavigate } from 'react-router-dom';
 import web3Service from '../../utils/web3';
@@ -26,11 +28,15 @@ const RegisterCompany = () => {
     valuation: '',
     fundingGoal: '',
     foundedDate: '',
+    cin: '',
+    email: '',
     useBlockchain: true
   });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
+  const [showCINLookup, setShowCINLookup] = useState(false);
+  const [selectedCompanyInfo, setSelectedCompanyInfo] = useState(null);
   const navigate = useNavigate();
   const { isConnected, address } = useWalletStore();
 
@@ -54,11 +60,25 @@ const RegisterCompany = () => {
     }
   };
 
+  const handleCINSelect = (companyInfo) => {
+    setSelectedCompanyInfo(companyInfo);
+    setForm(prev => ({
+      ...prev,
+      cin: companyInfo.cin,
+      name: prev.name || companyInfo.name // Only set name if not already filled
+    }));
+  };
+
   const validate = () => {
     if (!form.name.trim()) return 'Company name is required';
     if (!form.description.trim() || form.description.length < 10) return 'Description must be at least 10 characters';
     if (!form.industry) return 'Industry is required';
     if (!form.valuation || isNaN(form.valuation) || Number(form.valuation) <= 0) return 'Valid valuation is required';
+    if (!form.cin) return 'CIN (Corporate Identity Number) is required';
+    if (!form.email) return 'Business email is required';
+    if (!form.email.includes('@')) return 'Please enter a valid email address';
+    // Validate CIN format: 21 characters, alphanumeric
+    if (!/^[A-Z0-9]{21}$/.test(form.cin)) return 'CIN must be 21 characters long and contain only letters and numbers';
     
     // Check wallet connection if blockchain verification is enabled
     if (form.useBlockchain && !isConnected) {
@@ -211,6 +231,60 @@ const RegisterCompany = () => {
               className="input"
             />
           </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">CIN (Corporate Identity Number)</label>
+            <div className="flex space-x-2">
+              <input
+                type="text"
+                name="cin"
+                value={form.cin}
+                onChange={handleChange}
+                className="input uppercase flex-1"
+                placeholder="Enter 21-digit CIN"
+                maxLength={21}
+                pattern="[A-Z0-9]{21}"
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowCINLookup(true)}
+                className="btn btn-secondary flex items-center"
+              >
+                <Search className="w-4 h-4 mr-2" />
+                Search CIN
+              </button>
+            </div>
+            <p className="text-xs text-gray-500 mt-1">
+              Example: U74999TN2018PTC123456 or use the search button to find your company's CIN
+            </p>
+            {selectedCompanyInfo && (
+              <div className="mt-2 p-3 bg-green-50 border border-green-200 rounded-lg">
+                <p className="text-sm text-green-800">
+                  <strong>Selected:</strong> {selectedCompanyInfo.name}
+                </p>
+                <p className="text-xs text-green-600">
+                  Status: {selectedCompanyInfo.status} | CIN: {selectedCompanyInfo.cin}
+                </p>
+              </div>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Business Email</label>
+            <input
+              type="email"
+              name="email"
+              value={form.email}
+              onChange={handleChange}
+              className="input"
+              placeholder="company@domain.com"
+              required
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              A verification email will be sent to this address
+            </p>
+          </div>
           
           <div className="flex items-center">
             <input
@@ -253,6 +327,13 @@ const RegisterCompany = () => {
           </div>
         </form>
       </Card>
+
+      {/* CIN Lookup Modal */}
+      <CINLookup
+        isOpen={showCINLookup}
+        onClose={() => setShowCINLookup(false)}
+        onCINSelect={handleCINSelect}
+      />
     </div>
   );
 };

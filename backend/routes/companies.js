@@ -4,15 +4,76 @@ const { supabase, supabaseAdmin } = require('../config/supabase');
 const { authMiddleware, optionalAuthMiddleware } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
 const blockchainService = require('../config/blockchain');
+const companyVerification = require('../utils/companyVerification');
+const riskAnalysis = require('../utils/riskAnalysis');
 
 const router = express.Router();
+
+// Search companies by name for CIN lookup
+router.get('/search/by-name', [
+  query('name').trim().isLength({ min: 2 }).withMessage('Company name must be at least 2 characters'),
+  query('mode').optional().isIn(['SW', 'NC']).withMessage('Search mode must be SW or NC')
+], asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      message: 'Validation failed',
+      errors: errors.array()
+    });
+  }
+
+  const { name, mode = 'SW' } = req.query;
+  const result = await companyVerification.searchCompanyByName(name, mode);
+
+  if (result.success) {
+    res.json({
+      success: true,
+      data: result.companies
+    });
+  } else {
+    res.status(404).json({
+      success: false,
+      message: result.error
+    });
+  }
+}));
+
+// Search company by PAN for CIN lookup
+router.get('/search/by-pan', [
+  query('pan').trim().isLength({ min: 10, max: 10 }).withMessage('PAN must be 10 characters')
+], asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      message: 'Validation failed',
+      errors: errors.array()
+    });
+  }
+
+  const { pan } = req.query;
+  const result = await companyVerification.searchCompanyByPAN(pan);
+
+  if (result.success) {
+    res.json({
+      success: true,
+      data: result.companies
+    });
+  } else {
+    res.status(404).json({
+      success: false,
+      message: result.error
+    });
+  }
+}));
 
 // Validation middleware
 const validateCompanyRegistration = [
   body('name').trim().isLength({ min: 1 }).withMessage('Company name is required'),
   body('description').trim().isLength({ min: 10 }).withMessage('Description must be at least 10 characters'),
   body('industry').trim().isLength({ min: 1 }).withMessage('Industry is required'),
-  body('valuation').isNumeric().withMessage('Valuation must be a number'),
+  body('valuation').isFloat({ gt: 0 }).withMessage('Valuation must be a positive number'),
   body('useBlockchain').optional().isBoolean()
 ];
 
@@ -25,6 +86,46 @@ router.post('/register', authMiddleware, validateCompanyRegistration, asyncHandl
       message: 'Validation failed',
       errors: errors.array()
     });
+  }
+
+  // Verify CIN and company details
+  const { cin, email } = req.body;
+  if (cin) {
+    const cinVerification = await companyVerification.verifyCIN(cin);
+    if (!cinVerification.isValid) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid CIN or company verification failed',
+        error: cinVerification.error
+      });
+    }
+
+    // Store verified company data
+    const verificationData = {
+      cin,
+      company_name: cinVerification.companyData.name,
+      registered_address: cinVerification.companyData.address,
+      incorporation_date: cinVerification.companyData.incorporation_date,
+      status: cinVerification.companyData.status,
+      pan: cinVerification.companyData.pan,
+      industry: cinVerification.companyData.industry,
+      verified_at: new Date().toISOString()
+    };
+
+    // Save verification data
+    await supabase.from('company_verifications').insert(verificationData);
+  }
+
+  // Start email verification process if email provided
+  if (email) {
+    const emailResult = await companyVerification.verifyBusinessEmail(email, email.split('@')[1]);
+    if (emailResult.status === 'error') {
+      return res.status(400).json({
+        success: false,
+        message: 'Email verification failed',
+        error: emailResult.error
+      });
+    }
   }
 
   const { name, description, industry, valuation, useBlockchain = true } = req.body;
@@ -51,6 +152,24 @@ router.post('/register', authMiddleware, validateCompanyRegistration, asyncHandl
   // Handle blockchain registration
   if (useBlockchain && req.user.walletAddress) {
     try {
+      // If configured, require a minimum wallet balance to attempt on-chain minting
+      const minMintBalance = parseFloat(process.env.MIN_WALLET_BALANCE_FOR_MINT_ETH || '0');
+      if (minMintBalance > 0) {
+        try {
+          const walletBalStr = await blockchainService.getBalance(req.user.walletAddress);
+          const walletBal = parseFloat(walletBalStr || '0');
+          if (isNaN(walletBal) || walletBal < minMintBalance) {
+            return res.status(400).json({
+              success: false,
+              message: `Wallet balance too low to register on-chain. Minimum ${minMintBalance} ETH required.`
+            });
+          }
+        } catch (e) {
+          console.warn('Company register balance check failed:', e?.message || e);
+          // allow mint attempt to continue on provider errors
+        }
+      }
+
       console.log('⛓️  Attempting on-chain mint with config:', {
         hasProvider: !!blockchainService.provider,
         hasSigner: !!blockchainService.signer,
@@ -372,6 +491,13 @@ router.get('/:id', optionalAuthMiddleware, asyncHandler(async (req, res) => {
         is_active,
         start_time,
         end_time
+      ),
+      company_verifications (
+        id,
+        cin,
+        company_name,
+        status,
+        verified_at
       )
     `)
     .eq('id', id)
@@ -423,6 +549,8 @@ router.get('/:id', optionalAuthMiddleware, asyncHandler(async (req, res) => {
         totalMilestones: company.milestones.length,
         tokenId: company.blockchain_token_id,
         isBlockchainVerified: company.is_blockchain_verified,
+        cinVerified: company.company_verifications && company.company_verifications.length > 0,
+        emailVerified: company.email_verified || false,
         owner: {
           firstName: company.profiles?.first_name,
           lastName: company.profiles?.last_name,
@@ -726,6 +854,71 @@ router.post('/:id/verify-blockchain', authMiddleware, asyncHandler(async (req, r
   } catch (err) {
     console.error('verify-blockchain error:', err);
     return res.status(500).json({ success: false, message: 'Blockchain verification failed' });
+  }
+}));
+
+// Verify email token
+router.post('/:id/verify-email', authMiddleware, asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { token } = req.body;
+
+  // Check company ownership
+  const { data: company } = await supabase
+    .from('companies')
+    .select('owner_id, email')
+    .eq('id', id)
+    .single();
+
+  if (!company || company.owner_id !== req.user.id) {
+    return res.status(403).json({
+      success: false,
+      message: 'You can only verify your own company\'s email'
+    });
+  }
+
+  const result = await companyVerification.verifyEmailToken(company.email, token);
+  if (!result.verified) {
+    return res.status(400).json({
+      success: false,
+      message: 'Email verification failed',
+      error: result.error
+    });
+  }
+
+  // Update company with verified email status
+  await supabase
+    .from('companies')
+    .update({
+      email_verified: true,
+      verified_domain: company.email.split('@')[1],
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', id);
+
+  res.json({
+    success: true,
+    message: 'Email verified successfully'
+  });
+}));
+
+// Get company risk analysis
+router.get('/:id/risk-analysis', asyncHandler(async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const riskReport = await riskAnalysis.generateRiskReport(id);
+
+    res.json({
+      success: true,
+      data: riskReport
+    });
+  } catch (error) {
+    console.error('Risk analysis error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to generate risk analysis',
+      error: error.message
+    });
   }
 }));
 

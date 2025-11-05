@@ -6,6 +6,7 @@ const { body, validationResult } = require('express-validator');
 const { supabase, supabaseAdmin } = require('../config/supabase');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { ethers } = require('ethers');
+const blockchainService = require('../config/blockchain');
 
 const router = express.Router();
 
@@ -274,6 +275,25 @@ router.post('/wallet-auth', validateWalletAuth, asyncHandler(async (req, res) =>
   }
 
   const normalizedAddress = walletAddress.toLowerCase();
+
+  // Optional: enforce a minimum wallet balance for onboarding (configurable via env)
+  // Set MIN_WALLET_BALANCE_ETH (e.g. 0.001) to require a minimum ETH balance for wallet-based registration.
+  const minBalanceRequired = parseFloat(process.env.MIN_WALLET_BALANCE_ETH || '0');
+  if (minBalanceRequired > 0) {
+    try {
+      const balStr = await blockchainService.getBalance(normalizedAddress);
+      const bal = parseFloat(balStr || '0');
+      if (isNaN(bal) || bal < minBalanceRequired) {
+        return res.status(400).json({
+          success: false,
+          message: `Insufficient wallet balance. Minimum ${minBalanceRequired} ETH required to register with a wallet.`
+        });
+      }
+    } catch (e) {
+      console.warn('wallet-auth balance check failed:', e?.message || e);
+      // If balance check fails due to provider error, allow flow to continue (avoid blocking signups for infra issues)
+    }
+  }
 
   // If caller is already authenticated, link wallet to existing profile
   let linkUserId = null;
