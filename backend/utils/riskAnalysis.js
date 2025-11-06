@@ -192,7 +192,7 @@ class RiskAnalysis {
                     riskDescription,
                     deductions,
                     verificationStatus: {
-                        cinVerified: Boolean(company.company_verifications),
+                        cinVerified: false, // Hardcoded to not verified for now
                         emailVerified: Boolean(company.email_verified),
                         blockchainVerified: Boolean(company.is_blockchain_verified),
                         domainVerified: Boolean(company.verified_domain)

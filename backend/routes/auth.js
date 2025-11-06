@@ -2,6 +2,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
+const axios = require('axios');
 const { body, validationResult } = require('express-validator');
 const { supabase, supabaseAdmin } = require('../config/supabase');
 const { asyncHandler } = require('../middleware/errorHandler');
@@ -47,6 +48,12 @@ const validateWalletAuth = [
   body('fullName').optional().trim(),
   body('firstName').optional().trim(),
   body('lastName').optional().trim()
+];
+
+const validateLinkedInCallback = [
+  body('code').exists().withMessage('Authorization code is required'),
+  body('state').exists().withMessage('State parameter is required'),
+  body('redirect_uri').exists().withMessage('Redirect URI is required')
 ];
 
 // Traditional email/password registration
@@ -537,6 +544,169 @@ router.post('/forgot-password', [
     success: true,
     message: 'If the email exists, a reset link has been sent'
   });
+}));
+
+// LinkedIn OAuth callback
+router.post('/linkedin/callback', validateLinkedInCallback, asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      message: 'Validation failed',
+      errors: errors.array()
+    });
+  }
+
+  const { code, state, redirect_uri } = req.body;
+
+  try {
+    // LinkedIn OAuth configuration
+    const linkedInConfig = {
+      client_id: process.env.LINKEDIN_CLIENT_ID,
+      client_secret: process.env.LINKEDIN_CLIENT_SECRET,
+      redirect_uri: redirect_uri,
+      grant_type: 'authorization_code'
+    };
+
+    if (!linkedInConfig.client_id || !linkedInConfig.client_secret) {
+      return res.status(500).json({
+        success: false,
+        message: 'LinkedIn OAuth not configured properly'
+      });
+    }
+
+    // Step 1: Exchange authorization code for access token
+    const tokenResponse = await axios.post('https://www.linkedin.com/oauth/v2/accessToken', {
+      grant_type: linkedInConfig.grant_type,
+      code: code,
+      redirect_uri: linkedInConfig.redirect_uri,
+      client_id: linkedInConfig.client_id,
+      client_secret: linkedInConfig.client_secret
+    }, {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      }
+    });
+
+    const { access_token } = tokenResponse.data;
+
+    // Step 2: Get user profile from LinkedIn
+    const profileResponse = await axios.get('https://api.linkedin.com/v2/userinfo', {
+      headers: {
+        'Authorization': `Bearer ${access_token}`
+      }
+    });
+
+    const linkedInProfile = profileResponse.data;
+
+    // Step 3: Check if user exists in our database
+    const { data: existingProfile } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('email', linkedInProfile.email)
+      .single();
+
+    let user;
+    let isNewUser = false;
+
+    if (existingProfile) {
+      // Update existing user with LinkedIn info
+      const { data: updatedProfile, error: updateError } = await supabase
+        .from('profiles')
+        .update({
+          linkedin_id: linkedInProfile.sub,
+          linkedin_profile_url: linkedInProfile.profile || null,
+          picture: linkedInProfile.picture || existingProfile.picture,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', existingProfile.id)
+        .select('*')
+        .single();
+
+      if (updateError) {
+        throw new Error('Failed to update user profile');
+      }
+
+      user = updatedProfile;
+    } else {
+      // Create new user from LinkedIn profile
+      isNewUser = true;
+      const newUserId = crypto.randomUUID();
+
+      const { data: newProfile, error: createError } = await supabase
+        .from('profiles')
+        .insert({
+          id: newUserId,
+          email: linkedInProfile.email,
+          first_name: linkedInProfile.given_name,
+          last_name: linkedInProfile.family_name,
+          linkedin_id: linkedInProfile.sub,
+          linkedin_profile_url: linkedInProfile.profile || null,
+          picture: linkedInProfile.picture,
+          auth_method: 'linkedin',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .select('*')
+        .single();
+
+      if (createError) {
+        console.error('Profile creation error:', createError);
+        throw new Error('Failed to create user profile');
+      }
+
+      user = newProfile;
+    }
+
+    // Generate JWT token
+    const token = jwt.sign(
+      { 
+        id: user.id, 
+        email: user.email,
+        walletAddress: user.wallet_address
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRES_IN || '24h' }
+    );
+
+    // Return user data and token
+    res.status(200).json({
+      success: true,
+      message: isNewUser ? 'Account created successfully' : 'Login successful',
+      data: {
+        user: {
+          id: user.id,
+          email: user.email,
+          firstName: user.first_name,
+          lastName: user.last_name,
+          picture: user.picture,
+          authMethod: 'linkedin',
+          walletAddress: user.wallet_address,
+          linkedInProfile: user.linkedin_profile_url
+        },
+        token,
+        isNewUser
+      }
+    });
+
+  } catch (error) {
+    console.error('LinkedIn OAuth error:', error);
+    
+    if (error.response) {
+      // LinkedIn API error
+      return res.status(400).json({
+        success: false,
+        message: 'LinkedIn authentication failed',
+        error: error.response.data?.error_description || error.message
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: 'Authentication failed',
+      error: error.message
+    });
+  }
 }));
 
 module.exports = router;

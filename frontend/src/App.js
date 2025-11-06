@@ -15,6 +15,7 @@ import LoadingSpinner from './components/UI/LoadingSpinner';
 import Home from './pages/Home';
 import Login from './pages/Auth/Login';
 import Register from './pages/Auth/Register';
+import LinkedInCallback from './pages/Auth/LinkedInCallback';
 import Dashboard from './pages/Dashboard/Dashboard';
 import Companies from './pages/Dashboard/Companies';
 import CompanyDetail from './pages/Dashboard/CompanyDetail';
@@ -97,6 +98,10 @@ function App() {
           element={
             isAuthenticated ? <Navigate to="/dashboard" replace /> : <Register />
           } 
+        />
+        <Route 
+          path="/auth/linkedin/callback" 
+          element={<LinkedInCallback />} 
         />
 
         {/* Protected routes */}

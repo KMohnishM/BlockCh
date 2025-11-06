@@ -17,8 +17,9 @@ class Web3Service {
     this.provider = null;
     this.signer = null;
     this.contract = null;
-    this.contractAddress = process.env.REACT_APP_CONTRACT_ADDRESS;
+    this.contractAddress = process.env.REACT_APP_CONTRACT_ADDRESS || '0x5FbDB2315678afecb367f032d93F642f64180aa3';
     this.chainId = process.env.REACT_APP_CHAIN_ID || '1337';
+    console.log('Web3Service initialized with contract address:', this.contractAddress);
   }
 
   // Check if MetaMask is installed
@@ -203,10 +204,17 @@ class Web3Service {
 
   async investInCompany(companyTokenId, amount) {
     try {
+      console.log('investInCompany called with:', { companyTokenId, amount, hasContract: !!this.contract });
+      
       if (!this.contract) {
-        throw new Error('Contract not initialized');
+        console.log('Contract not initialized, attempting to initialize...');
+        await this.init();
+        if (!this.contract) {
+          throw new Error('Contract not initialized - missing contract address');
+        }
       }
 
+      console.log('Contract available, submitting transaction...');
       const tx = await this.contract.investInCompany(companyTokenId, {
         value: ethers.parseEther(amount.toString())
       });
@@ -365,4 +373,5 @@ class Web3Service {
   }
 }
 
-export default new Web3Service();
+const web3Service = new Web3Service();
+export default web3Service;

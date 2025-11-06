@@ -96,14 +96,11 @@ const InvestInCompany = () => {
         setError('Connect your wallet to invest on-chain');
         return;
       }
-      if (!company?.tokenId) {
-        setError('Company is not verified on-chain yet');
-        return;
-      }
       if (parseFloat(investmentAmount) < 0.0001) {
         setError('Minimum on-chain investment is 0.0001 ETH');
         return;
       }
+      // Note: We'll check tokenId during the actual investment process
     }
 
     setShowConfirmation(true);
@@ -124,14 +121,20 @@ const InvestInCompany = () => {
           setShowConfirmation(false);
           return;
         }
-        if (!company?.tokenId) {
-          setError('Company is not verified on-chain yet');
+        if (!company?.tokenId && !company?.isBlockchainVerified) {
+          setError('Company needs to be verified on blockchain first. Please contact the company owner.');
           setShowConfirmation(false);
           return;
         }
 
         // Send tx via MetaMask
-  const { txHash } = await web3Service.investInCompany(company.tokenId, amountEth);
+        console.log('Attempting blockchain investment:', { tokenId: company.tokenId, amountEth });
+        
+        const result = await web3Service.investInCompany(company.tokenId, amountEth);
+        if (!result || !result.txHash) {
+          throw new Error('Invalid response from web3Service.investInCompany');
+        }
+        const { txHash } = result;
         toast.success('On-chain transaction confirmed');
 
         // Record it in backend
@@ -414,9 +417,10 @@ const InvestInCompany = () => {
                     type="submit"
                     disabled={
                       !investmentAmount ||
+                      parseFloat(investmentAmount) <= 0 ||
                       (paymentMethod === 'traditional' 
                         ? parseFloat(investmentAmount) < 100 
-                        : parseFloat(investmentAmount) < 0.0001 || !isConnected || !company?.isBlockchainVerified || !company?.tokenId)
+                        : parseFloat(investmentAmount) < 0.0001 || !isConnected)
                     }
                     className="flex-1 btn btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
                   >

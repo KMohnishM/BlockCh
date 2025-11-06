@@ -11,14 +11,14 @@ async function main() {
         );
 
         // The address we want to fund (from env)
-        const targetAddress = process.env.WALLET_ADDRESS || '0xBCfb98b5fc4Fa8a8169253f0008943F74668b39A';
+        const targetAddress = '0xe28A4a57D33b0aa111DB89930FF2b1e38dc38f34';
 
         console.log('Funding wallet:', targetAddress);
         
         // Send 1 ETH
         const tx = await localSigner.sendTransaction({
             to: targetAddress,
-            value: ethers.parseEther('1.0')
+            value: ethers.parseEther('1000.0')
         });
 
         console.log('Transaction sent:', tx.hash);
