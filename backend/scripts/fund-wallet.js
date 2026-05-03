@@ -11,7 +11,7 @@ async function main() {
         );
 
         // The address we want to fund (from env)
-        const targetAddress = '0xe28A4a57D33b0aa111DB89930FF2b1e38dc38f34';
+        const targetAddress = '0xbcfb98b5fc4fa8a8169253f0008943f74668b39a';
 
         console.log('Funding wallet:', targetAddress);
         
